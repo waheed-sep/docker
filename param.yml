@@ -1,0 +1,8 @@
+repo:
+  repo_url: https://github.com/x-stream/xstream.git
+  groupId: com.thoughtworks.xstream
+  artifactId: xstream
+  version: waheed
+
+plot:
+  plot_title: Xstream

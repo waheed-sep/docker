@@ -1,33 +1,42 @@
 import shutil
-from pydriller import Repository
-from collections import Counter
-import xml.etree.ElementTree as ET
 import subprocess
 import re
 import json
 import os
 import csv
-import pandas as pd
-import matplotlib.pyplot as plt
+import yaml
+from collections import Counter
+import xml.etree.ElementTree as ET
 
-# Configuration variables
-JMH_PATH = os.path.join(os.path.dirname(__file__), '../jmh/jmh-xstream')
-REPO_PATH = os.path.join(os.path.dirname(__file__), '../repos/repo-xstream')
-RESULTS_PATH = os.path.join(os.path.dirname(__file__), '../results/res-xstream')
-RMINER_JSON_OUTPUT = RESULTS_PATH + "/rminer_results.json"
+from pydriller import Repository  # Install with: pip install pydriller
+import pandas as pd               # Install with: pip install pandas
+import matplotlib.pyplot as plt    # Install with: pip install matplotlib
+
+
+JMH_PATH = "/app/jmh"
+REPO_PATH =  "/app/repo"
+RESULTS_PATH = "/app/results"
+RMINER_JSON_OUTPUT = RESULTS_PATH + "/rminer_result.json"
 COMMIT_JARS = RESULTS_PATH + "/commit-jars"
 JMH_RESULTS = RESULTS_PATH + "/jmh-results"
 PERF_DATA = RESULTS_PATH + "/perf-data"
-# JMH_DIR = "../jmh/jmh_xstream"
 
 os.makedirs(COMMIT_JARS, exist_ok=True)
 os.makedirs(JMH_RESULTS, exist_ok=True)
 os.makedirs(PERF_DATA, exist_ok=True)
 os.makedirs(RESULTS_PATH, exist_ok=True)
 
+MAVEN_REPO = os.path.expanduser("/root/.m2/repository")  # Maven repository path
+
+###################################### Load <params.yaml> ######################################
+def load_config(file_path='/app/params.yaml'):
+    with open(file_path, 'r') as file:
+        repo_params = yaml.safe_load(file)
+    return repo_params
+
+params = load_config()
 
 ###################################### Clone repository ######################################
-
 def clone_repository(repo_url, target_directory):
     try:
         # Ensure the target directory exists
@@ -42,28 +51,59 @@ def clone_repository(repo_url, target_directory):
     except Exception as ex:
         print(f"An unexpected error occurred: {ex}")
 
+def modify_pom_xml(pom_path, group_id, artifact_id, version):
+    try:
+        with open(pom_path, "r") as file:
+            pom_content = file.read()
+
+        # Replace the groupId, artifactId, and version in the pom.xml
+        pom_content = pom_content.replace("<groupId>org.x-stream</groupId>", f"<groupId>{group_id}</groupId>")
+        pom_content = pom_content.replace("<artifactId>xstream</artifactId>", f"<artifactId>{artifact_id}</artifactId>")
+        pom_content = pom_content.replace("<version>1.4.20</version>", f"<version>{version}</version>")
+
+        # Write the updated content back to the pom.xml
+        with open(pom_path, "w") as file:
+            file.write(pom_content)
+
+        print(f"Updated {pom_path} with groupId={group_id}, artifactId={artifact_id}, version={version}")
+    except Exception as ex:
+        print(f"An error occurred while modifying the pom.xml file: {ex}")
+
+def install_with_maven(project_directory):
+    try:
+        # Run the Maven install command
+        subprocess.run(["mvn", "clean", "install", "-DskipTests"], cwd=project_directory, check=True)
+        print(f"Project installed successfully to {MAVEN_REPO}")
+    except subprocess.CalledProcessError as e:
+        print(f"Error occurred while running Maven install: {e}")
+    except Exception as ex:
+        print(f"An unexpected error occurred: {ex}")
 
 if __name__ == "__main__":
-    repo_url = "https://github.com/x-stream/xstream.git"
-    # target_directory = os.path.abspath(os.path.join(REPOS_PATH, "repo-xstream"))
-    # target_directory = REPOS_PATH
-    # print(target_directory)
+    repo_url =  params['repo']['repo_url'] # "https://github.com/x-stream/xstream.git"
     clone_repository(repo_url, REPO_PATH)
 
+    # Define your custom groupId, artifactId, and version
+    group_id = params['repo']['groupId'] # "com.thoughtworks.xstream"
+    artifact_id = params['repo']['artifactId'] # "xstream"
+    version = params['repo']['version'] # "waheed"
+
+    # Path to the pom.xml file in the cloned repository
+    pom_path = os.path.join(REPO_PATH, "pom.xml")
+
+    # Modify the pom.xml file
+    modify_pom_xml(pom_path, group_id, artifact_id, version)
+
+    # Install the project using Maven
+    install_with_maven(REPO_PATH)
 
 ###################################### Application of RefactoringMiner ######################################
 def run_refactoring_miner(repo, json_output, branch_name='master'):
     """Runs RefactoringMiner with the specified switches on a repository."""
 
     # Find the path for RefactoringMiner from the system's environment PATH variable
-    refactoring_miner_path = None
-    for path in os.environ['PATH'].split(os.pathsep):
-        candidate_path = os.path.join(path,
-                                      "/home/waheed/RefactoringMiner/build/distributions/RefactoringMiner-3.0.10/bin/RefactoringMiner")
-        if os.path.isfile(candidate_path):
-            refactoring_miner_path = candidate_path
-            break
-
+    refactoring_miner_path = "/app/RefactoringMiner/bin/RefactoringMiner"
+    
     if not refactoring_miner_path:
         print("Error: RefactoringMiner not found in system PATH.")
         return
@@ -71,15 +111,16 @@ def run_refactoring_miner(repo, json_output, branch_name='master'):
     # Construct the command for analyzing all commits in the specified branch
     command = [refactoring_miner_path, '-a', repo, branch_name, '-json', json_output]
 
-    # Explicitly set JAVA_HOME in the environment
-    env = os.environ.copy()
-    env['JAVA_HOME'] = "/usr/lib/jvm/java-1.21.0-openjdk-amd64"
-    env['PATH'] = f"/usr/lib/jvm/java-1.21.0-openjdk-amd64/bin:" + env['PATH']
+    # # Explicitly set JAVA_HOME in the environment
+    # env = os.environ.copy()
+    # env['JAVA_HOME'] = "/usr/lib/jvm/java-1.21.0-openjdk-amd64"
+    # env['PATH'] = f"/usr/lib/jvm/java-1.21.0-openjdk-amd64/bin:" + env['PATH']
 
     print("1. Running RefactoringMiner...")
 
     # Run the command and capture output
-    result = subprocess.run(command, stdout=subprocess.PIPE, stderr=subprocess.PIPE, env=env)
+    # result = subprocess.run(command, stdout=subprocess.PIPE, stderr=subprocess.PIPE, env=env)
+    result = subprocess.run(command, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
 
     if result.returncode == 0:
         print(f"1.1 RefactoringMiner operation successful. Results saved in {os.path.abspath(json_output)}.")
@@ -318,7 +359,7 @@ filtered_commits = df[(df['Refactorings_found'] >= 20) & (df['Status'] == 'Succe
 
 # Process each filtered commit
 if not filtered_commits:
-    print("5. No commits found with 'Refactorings_found' >= 20 and status 'Success' .")
+    print("5. No commits found with 'Refactorings_found' >= 20 and status 'Success'.")
 else:
     for commit_hash in filtered_commits:
         print(f"\nProcessing commit: {commit_hash}")
@@ -350,12 +391,11 @@ else:
 
         # Compile the project
         try:
-            subprocess.run(["mvn", "package", "-Dmaven.test.skip=true", "-Drat.skip=true", "-Dmaven.javadoc.skip=true"],
-                           check=True)
+            subprocess.run(["mvn", "package", "-Dmaven.test.skip=true", "-Drat.skip=true", "-Dmaven.javadoc.skip=true"], check=True)
             print(f"5.3 Project compiled successfully for commit {commit_hash}")
 
             # Copy and rename only the main JAR file to avoid duplications
-            target_dir = os.path.join(REPO_PATH, "xstream/target")
+            target_dir = os.path.join(REPO_PATH, params['plot']['plot_title'].lower() + "/target")
             if os.path.exists(target_dir):
                 jar_files = [f for f in os.listdir(target_dir) if f.endswith(".jar")]
                 for jar_file in jar_files:
@@ -368,17 +408,21 @@ else:
         except subprocess.CalledProcessError as e:
             print(f"5.3 Failed to compile project at commit {commit_hash}: {e}")
 
-print("5.4 Process completed.")
+print("5.4 Process completed.\n")
 
 ###################################### Calling commits_jmh.py ######################################
 
 # Maven install command
 MAVEN_INSTALL_CMD = [
     "mvn", "install:install-file",
-    "-DgroupId=com.thoughtworks.xstream",
-    "-DartifactId=xstream",
-    "-Dversion=waheed",
+    "-DgroupId=" + params['repo']['groupId'],
+    "-DartifactId=" + params['repo']['artifactId'],
+    "-Dversion=" + params['repo']['version'],
     "-Dpackaging=jar",
+    # "-DgroupId=com.thoughtworks.xstream",
+    # "-DartifactId=xstream",
+    # "-Dversion=waheed",
+    # "-Dpackaging=jar",
 ]
 
 
@@ -423,14 +467,30 @@ def process_jars():
             output_file = os.path.join(JMH_RESULTS, f"{jar_name_prefix}-jmh-output.txt")
             with open(output_file, "w") as output:
                 # subprocess.run(["java", "--add-opens", "java.base/java.util=ALL-UNNAMED", "-jar", benchmark_jar_path, "org.openjdk.jmh.Main", "-rff", "results.json", "-rf", "json"], cwd=JMH_DIR, stdout=output, stderr=subprocess.PIPE)
+                # subprocess.run(
+                #     ["java", "--add-opens", "java.base/java.util=ALL-UNNAMED", "-cp",
+                #      benchmark_jar_path,
+                #      "org.openjdk.jmh.Main", "-rff", f"{PERF_DATA}/{jar_name_prefix}-perf-data.json", "-rf", "json"
+                #      ],
+                #     cwd=JMH_PATH,
+                #     stdout=output,
+                #     stderr=subprocess.PIPE)
                 subprocess.run(
-                    ["java", "--add-opens", "java.base/java.util=ALL-UNNAMED", "-cp",
-                     benchmark_jar_path,
-                     "org.openjdk.jmh.Main", "-rff", f"{PERF_DATA}/{jar_name_prefix}-perf-data.json", "-rf", "json"
-                     ],
+                    ["java", 
+                    "--add-opens", "java.base/java.util=ALL-UNNAMED", 
+                    "--add-opens", "java.base/java.lang.reflect=ALL-UNNAMED",
+                    "--add-opens", "java.base/java.text=ALL-UNNAMED",
+                    "--add-opens", "java.desktop/java.awt.font=ALL-UNNAMED",
+                    "-cp", benchmark_jar_path, 
+                    "org.openjdk.jmh.Main", 
+                    "-rff", f"{PERF_DATA}/{jar_name_prefix}-perf-data.json", 
+                    "-rf", "json"
+                    ],
                     cwd=JMH_PATH,
                     stdout=output,
-                    stderr=subprocess.PIPE)
+                    stderr=subprocess.PIPE
+                )
+                
                 print(f"6.6 Saved benchmark output to {os.path.abspath(output_file)}")
 
                 # Rename and move the generated res.csv file
@@ -547,7 +607,7 @@ def process_files_with_commit_insights(directory_path, commits_csv_path, output_
 # Define paths
 input_directory = os.path.join(RESULTS_PATH, "jmh-results")
 commits_csv = os.path.join(RESULTS_PATH, "commits-insights.csv")
-output_csv = os.path.join(RESULTS_PATH, "plot-data.csv")
+output_csv = os.path.join(RESULTS_PATH, "energy-data.csv")
 
 # Process files and save results
 process_files_with_commit_insights(input_directory, commits_csv, output_csv)
@@ -621,9 +681,9 @@ if __name__ == "__main__":
     results = process_json_files(json_dir, hash_year_map)
     write_to_csv(results, output_file)
 
-###################################### Energy and Performance score combine ######################################
+###################################### Energy and Performance combined score ######################################
 # File paths
-plot_data_file = RESULTS_PATH + "/plot-data.csv"
+plot_data_file = RESULTS_PATH + "/energy-data.csv"
 perf_data_file = RESULTS_PATH + "/perf-data/perf-data.csv"
 output_file = RESULTS_PATH + "/energy-perf-cmb.csv"
 
@@ -653,53 +713,3 @@ with open(perf_data_file, mode="r") as infile, open(output_file, mode="w", newli
         writer.writerow(row)
 
 print(f"Updated file created at: {output_file}")
-
-###################################### Energy vs. Performance plot ######################################
-# Load the CSV data
-file_path = RESULTS_PATH + "/energy-perf-cmb.csv"
-data = pd.read_csv(file_path)
-
-# Sort the data by the Year column to ensure commits are ordered correctly
-data = data.sort_values(by="Year")
-
-# Extract required columns for the plot
-commits = data["Commit_Hash"]
-years = data["Year"]
-energy_avg = data["Energy_Avg_(uj)"]
-score = data["Score"]
-
-# Create the plot
-fig, ax1 = plt.subplots(figsize=(12, 6))
-fig.canvas.manager.set_window_title("XStream energy consumption trend")
-
-# Plot Energy (uJ) on the left y-axis
-color = 'tab:blue'
-ax1.set_xlabel("Commit (Ordered by Year)")
-ax1.set_ylabel("Energy (uJ)", color=color)
-ax1.plot(commits, energy_avg, marker='o', color=color, label="Energy (uJ)")
-ax1.tick_params(axis='y', labelcolor=color)
-
-# Add another y-axis for Score
-ax2 = ax1.twinx()
-color = 'tab:green'
-ax2.set_ylabel("Performance (s/op)", color=color)
-ax2.plot(commits, score, marker='o', color=color, label="Performance (s/op)")
-ax2.tick_params(axis='y', labelcolor=color)
-
-# Set the title
-plt.title("Energy vs. Performance Trend (XStream)")
-
-# Rotate x-axis labels for better readability
-plt.xticks(ticks=range(len(commits)), labels=years, rotation=45, ha="right")
-
-# Add legends for clarity
-ax1.legend(loc="upper left")
-ax2.legend(loc="upper right")
-
-# Save the plot as a PNG file
-plot_output_path = os.path.join(RESULTS_PATH, "plot_output.png")
-plt.tight_layout()
-plt.savefig(plot_output_path)
-
-# Show the plot
-plt.show()
